@@ -153,6 +153,47 @@
   .import-status.ok{ color:var(--ok); }
   .import-status.err{ color:var(--warn); }
 
+  .done-row{
+    display:flex; align-items:center; gap:10px; padding:12px; margin-bottom:12px;
+    background:var(--surface); border:1px solid var(--line); border-radius:6px;
+  }
+  .done-row .done-check{ color:var(--ok); font-size:16px; flex-shrink:0; }
+  .done-row .done-name{
+    font-size:14px; font-weight:600; flex:1; min-width:0;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  }
+  .done-row .done-info{ font-size:12px; color:var(--text-muted); white-space:nowrap; }
+
+  .sheet-overlay{
+    position:fixed; inset:0; background:rgba(0,0,0,0.55); z-index:60;
+    display:flex; align-items:flex-end; justify-content:center;
+    opacity:0; pointer-events:none; transition:opacity 0.2s;
+  }
+  .sheet-overlay.show{ opacity:1; pointer-events:auto; }
+  .sheet{
+    width:100%; max-width:480px; background:var(--surface); border:1px solid var(--line);
+    border-radius:14px 14px 0 0; padding:18px 18px calc(18px + env(safe-area-inset-bottom));
+    transform:translateY(24px); transition:transform 0.2s;
+  }
+  .sheet-overlay.show .sheet{ transform:translateY(0); }
+  .sheet h3{ margin:0 0 8px; font-size:16px; text-transform:uppercase; }
+  .sheet .sheet-body{ font-size:13px; line-height:1.5; margin-bottom:14px; }
+  .sheet .sheet-body p{ margin:8px 0; }
+  .sheet .sheet-body .muted{ color:var(--text-muted); }
+  .sheet .sheet-btns{ display:flex; gap:8px; }
+  .btn-danger{ background:var(--warn); color:#fff; }
+  .warmup-table{ width:100%; font-size:13px; border-collapse:collapse; margin:10px 0 2px; }
+  .warmup-table td{ padding:5px 0; border-bottom:1px solid var(--line); }
+  .warmup-table td:last-child{ text-align:right; font-weight:600; }
+  .warmup-table tr:last-child td{ border-bottom:none; }
+
+  .spark{ display:block; width:100%; height:44px; margin:2px 0 8px; }
+
+  .nudge{
+    background:rgba(242,183,5,0.08); border:1px solid rgba(242,183,5,0.3); color:var(--accent);
+    border-radius:6px; padding:10px 12px; font-size:13px; margin-bottom:12px;
+  }
+
   .rest-bar{
     position:fixed; bottom:64px; left:50%; transform:translateX(-50%);
     width:min(452px, calc(100% - 28px));
@@ -201,6 +242,7 @@
     <button data-tab="history"><span>History</span><span class="dot"></span></button>
   </nav>
 </div>
+<div class="sheet-overlay" id="sheetOverlay"><div class="sheet" id="sheet"></div></div>
 <div class="toast" id="toast"></div>
 <div class="rest-bar" id="restBar">
   <span class="rest-label">Rest</span>
@@ -381,15 +423,16 @@ const DAY_LABELS = {
   legs: ['Legs', 'Quads · Hamstrings · Calves'],
 };
 
-let state = null; // { exercises: { id: {weight, unit, fails, lastResult} }, history: [ {id, date, weight, reps:[], result} ] }
+let state = null; // { exercises: { id: {weight, unit, fails, lastResult} }, history: [ {id, date, weight, reps:[], result} ], bodyweight, lastBackup }
 let activeTab = 'push';
+const expandedToday = new Set(); // logged-today cards the user re-opened this session
 
 function defaultState(){
   const exercises = {};
   DEFAULT_EXERCISES.forEach(e => {
     exercises[e.id] = { weight: null, unit: 'kg', fails: 0 };
   });
-  return { exercises, history: [], bodyweight: null };
+  return { exercises, history: [], bodyweight: null, lastBackup: null };
 }
 
 async function loadState(){
@@ -404,6 +447,7 @@ async function loadState(){
     state = defaultState();
     showToast('Could not load saved data — starting fresh. Storage may be briefly unavailable.');
   }
+  activeTab = suggestDay();
   render();
   wireBodyweight();
 }
@@ -465,6 +509,36 @@ function roundDownToStep(val){
 
 function exById(id){ return DEFAULT_EXERCISES.find(e => e.id === id); }
 function lastEntryFor(id){ return state.history.find(h => h.id === id) || null; }
+function isToday(iso){ return new Date(iso).toDateString() === new Date().toDateString(); }
+function loggedToday(id){ const le = lastEntryFor(id); return !!(le && isToday(le.date)); }
+
+// Open the app on the day you're most likely training: the day already
+// started today, otherwise the next one in the Push → Pull → Legs rotation.
+function suggestDay(){
+  if(!state.history.length) return 'push';
+  const last = state.history[0];
+  const ex = exById(last.id);
+  const lastDay = ex ? ex.day : 'push';
+  if(isToday(last.date)) return lastDay;
+  const order = ['push', 'pull', 'legs'];
+  return order[(order.indexOf(lastDay) + 1) % order.length];
+}
+
+function showSheet(title, bodyHTML, buttons){
+  const sheet = document.getElementById('sheet');
+  sheet.innerHTML = `<h3></h3><div class="sheet-body">${bodyHTML}</div><div class="sheet-btns"></div>`;
+  sheet.querySelector('h3').textContent = title;
+  const btnWrap = sheet.querySelector('.sheet-btns');
+  (buttons || [{ label: 'Got it', cls: 'btn-primary' }]).forEach(b => {
+    const btn = document.createElement('button');
+    btn.className = 'btn ' + (b.cls || 'btn-ghost');
+    btn.textContent = b.label;
+    btn.onclick = () => { hideSheet(); if(b.onClick) b.onClick(); };
+    btnWrap.appendChild(btn);
+  });
+  document.getElementById('sheetOverlay').classList.add('show');
+}
+function hideSheet(){ document.getElementById('sheetOverlay').classList.remove('show'); }
 
 let restInterval = null;
 function stopRest(){
@@ -512,19 +586,44 @@ function render(){
   if(activeTab === 'history'){ renderHistory(main); return; }
 
   const list = DEFAULT_EXERCISES.filter(e => e.day === activeTab);
-  list.forEach(ex => main.appendChild(renderExerciseCard(ex)));
+  list.forEach(ex => {
+    if(loggedToday(ex.id) && !expandedToday.has(ex.id)){
+      main.appendChild(renderDoneRow(ex));
+    } else {
+      main.appendChild(renderExerciseCard(ex));
+    }
+  });
 
   const resetWrap = document.createElement('div');
   resetWrap.className = 'reset-wrap';
   resetWrap.innerHTML = `<button class="reset-link" id="resetBtn">Reset all data</button>`;
   main.appendChild(resetWrap);
-  document.getElementById('resetBtn').onclick = async () => {
-    if(confirm('This clears all weights and history. Continue?')){
-      state = defaultState();
-      await saveState();
-      render();
-    }
+  document.getElementById('resetBtn').onclick = () => {
+    showSheet('Reset all data', 'This clears every weight and all history. It cannot be undone.', [
+      { label: 'Cancel', cls: 'btn-ghost' },
+      { label: 'Reset', cls: 'btn-danger', onClick: async () => {
+        state = defaultState();
+        await saveState();
+        render();
+        wireBodyweight();
+      }}
+    ]);
   };
+}
+
+function renderDoneRow(ex){
+  const le = lastEntryFor(ex.id);
+  const row = document.createElement('div');
+  row.className = 'done-row';
+  row.innerHTML = `<span class="done-check">✓</span><span class="done-name"></span><span class="done-info"></span>`;
+  row.querySelector('.done-name').textContent = ex.name;
+  row.querySelector('.done-info').textContent = le ? `${le.weight} kg × ${le.reps.join(', ')}` : '';
+  // swap in place — a full render() would wipe reps typed into other cards
+  row.onclick = () => {
+    expandedToday.add(ex.id);
+    row.replaceWith(renderExerciseCard(ex));
+  };
+  return row;
 }
 
 function renderExerciseCard(ex){
@@ -615,10 +714,21 @@ function renderExerciseCard(ex){
     if(data.weight === null){ data.weight = suggestion; }
     wvalEl.textContent = data.weight;
     saveState();
+    const w = data.weight;
+    const warm1 = Math.max(KG_STEP, roundToStep(w * 0.5));
+    const warm2 = Math.max(KG_STEP, roundToStep(w * 0.75));
     const bwNote = state.bodyweight
-      ? `Suggested starting point based on your bodyweight: ${suggestion} kg.\n\n`
-      : `Tip: enter your bodyweight at the top for a smarter suggestion.\n\n`;
-    alert(bwNote + 'Warm up, then adjust with +/- until you can just complete ' + ex.low + ' reps with ~2 left in reserve. That is your working weight — then log the session.');
+      ? `Starting point based on your bodyweight: <strong>${suggestion} kg</strong>.`
+      : `<span class="muted">Tip: enter your bodyweight at the top for a smarter suggestion.</span>`;
+    showSheet(ex.name, `
+      ${bwNote}
+      <p>Adjust with +/− until you can just complete ${ex.low} reps with ~2 left in reserve — that's your working weight.</p>
+      <table class="warmup-table">
+        <tr><td>Warm-up 1</td><td>${warm1} kg × 10</td></tr>
+        <tr><td>Warm-up 2</td><td>${warm2} kg × 5</td></tr>
+        <tr><td>Work sets</td><td>${w} kg × ${ex.low}–${ex.high}</td></tr>
+      </table>
+    `);
   };
 
   const fbEl = card.querySelector('[data-role="feedback"]');
@@ -689,8 +799,16 @@ function renderExerciseCard(ex){
     fbEl.appendChild(msgSpan);
     fbEl.appendChild(undoBtn);
     clearTimeout(card._undoT);
-    card._undoT = setTimeout(() => undoBtn.remove(), 10000);
+    card._undoT = setTimeout(() => {
+      undoBtn.remove();
+      // undo window over — shrink to a done-row so the next exercise is in reach
+      if(loggedToday(ex.id) && card.isConnected){
+        expandedToday.delete(ex.id);
+        card.replaceWith(renderDoneRow(ex));
+      }
+    }, 10000);
     undoBtn.onclick = () => {
+      clearTimeout(card._undoT);
       const idx = state.history.indexOf(entry);
       if(idx !== -1) state.history.splice(idx, 1);
       data.weight = prevWeight;
@@ -706,6 +824,29 @@ function renderExerciseCard(ex){
     wvalEl.textContent = data.weight;
     inputs.forEach(i => i.value = '');
     updateLast();
+
+    // whole day logged? show the session summary
+    const dayExs = DEFAULT_EXERCISES.filter(d => d.day === ex.day);
+    if(dayExs.every(d => loggedToday(d.id))){
+      const results = dayExs.map(d => lastEntryFor(d.id).result);
+      const count = r => results.filter(x => x === r).length;
+      const parts = [];
+      if(count('increase')) parts.push(`${count('increase')} increase${count('increase') > 1 ? 's' : ''}`);
+      if(count('hold')) parts.push(`${count('hold')} hold${count('hold') > 1 ? 's' : ''}`);
+      const misses = count('miss') + count('decrease');
+      if(misses) parts.push(`${misses} miss${misses > 1 ? 'es' : ''}`);
+      const weekDays = new Set(
+        state.history
+          .filter(h => Date.now() - new Date(h.date).getTime() < 7 * 86400000)
+          .map(h => new Date(h.date).toDateString())
+      ).size;
+      setTimeout(() => {
+        showSheet(`${DAY_LABELS[ex.day][0]} day done`, `
+          <strong>${parts.join(' · ')}</strong>
+          <p class="muted">${weekDays} workout day${weekDays > 1 ? 's' : ''} in the last 7. See you next session.</p>
+        `, [{ label: 'Nice', cls: 'btn-primary' }]);
+      }, 500);
+    }
   };
 
   return card;
@@ -732,40 +873,60 @@ function renderBackupCard(main){
   fileInput.onchange = (e) => handleImportFile(e, card.querySelector('#importStatus'));
 }
 
-function exportData(){
+async function exportData(){
   const dataStr = JSON.stringify(state, null, 2);
-  const blob = new Blob([dataStr], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = 'lift-tracker-backup-' + new Date().toISOString().slice(0,10) + '.json';
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  const fname = 'lift-tracker-backup-' + new Date().toISOString().slice(0,10) + '.json';
+  let shared = false;
+  // Web Share first (goes straight to Drive/messaging on Android); download as fallback
+  if(navigator.canShare){
+    try{
+      const file = new File([dataStr], fname, { type: 'application/json' });
+      if(navigator.canShare({ files: [file] })){
+        await navigator.share({ files: [file], title: 'Plate & Progress backup' });
+        shared = true;
+      }
+    }catch(err){
+      if(err && err.name === 'AbortError') return; // user closed the share sheet — not backed up
+    }
+  }
+  if(!shared){
+    const blob = new Blob([dataStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fname;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+  state.lastBackup = new Date().toISOString();
+  await saveState();
+  render(); // only reachable from the History tab, so no in-progress reps to lose
 }
 
 function handleImportFile(e, statusEl){
   const file = e.target.files[0];
   if(!file) return;
   const reader = new FileReader();
-  reader.onload = async (evt) => {
+  reader.onload = (evt) => {
     try{
       const parsed = JSON.parse(evt.target.result);
       if(!parsed.exercises || !parsed.history){
         throw new Error('missing fields');
       }
-      if(!confirm('Import will replace your current data with this backup. Continue?')){
-        e.target.value = '';
-        return;
-      }
-      state = Object.assign(defaultState(), parsed);
-      DEFAULT_EXERCISES.forEach(ex => { if(!state.exercises[ex.id]) state.exercises[ex.id] = { weight:null, unit:'kg', fails:0 }; });
-      await saveState();
-      statusEl.className = 'import-status show ok';
-      statusEl.textContent = 'Import successful.';
-      render();
-      wireBodyweight();
+      showSheet('Import backup', `This backup holds ${parsed.history.length} logged session${parsed.history.length === 1 ? '' : 's'}. Importing replaces everything currently in the app.`, [
+        { label: 'Cancel', cls: 'btn-ghost' },
+        { label: 'Replace data', cls: 'btn-danger', onClick: async () => {
+          state = Object.assign(defaultState(), parsed);
+          DEFAULT_EXERCISES.forEach(ex => { if(!state.exercises[ex.id]) state.exercises[ex.id] = { weight:null, unit:'kg', fails:0 }; });
+          await saveState();
+          render();
+          wireBodyweight();
+          const st = document.getElementById('importStatus');
+          if(st){ st.className = 'import-status show ok'; st.textContent = 'Import successful.'; }
+        }}
+      ]);
     }catch(err){
       statusEl.className = 'import-status show err';
       statusEl.textContent = 'Could not read that file — make sure it is a backup exported from this app.';
@@ -775,12 +936,42 @@ function handleImportFile(e, statusEl){
   reader.readAsText(file);
 }
 
+function sparkline(entries){ // entries newest-first, needs >= 2 points
+  const pts = entries.slice().reverse().map(h => h.weight);
+  if(pts.length < 2) return '';
+  const min = Math.min(...pts), max = Math.max(...pts);
+  const W = 300, H = 44, pad = 5;
+  const x = i => pad + i * (W - 2 * pad) / (pts.length - 1);
+  const y = v => max === min ? H / 2 : pad + (H - 2 * pad) * (1 - (v - min) / (max - min));
+  const poly = pts.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+  return `<svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+    <polyline points="${poly}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+    <circle cx="${x(pts.length - 1)}" cy="${y(pts[pts.length - 1])}" r="3" fill="var(--accent)"/>
+  </svg>`;
+}
+
+function backupNudge(){
+  if(state.history.length < 5) return null;
+  const days = state.lastBackup
+    ? Math.floor((Date.now() - new Date(state.lastBackup).getTime()) / 86400000)
+    : null;
+  if(days !== null && days < 14) return null;
+  const div = document.createElement('div');
+  div.className = 'nudge';
+  div.textContent = days === null
+    ? 'Your training history lives only on this device — export a backup below.'
+    : `Last backup ${days} days ago — export a fresh one below.`;
+  return div;
+}
+
 function renderHistory(main){
   if(!state.history.length){
     main.innerHTML = '<div class="empty-hint">No sessions logged yet. Log one from Push, Pull, or Legs to see it here.</div>';
     renderBackupCard(main);
     return;
   }
+  const nudge = backupNudge();
+  if(nudge) main.appendChild(nudge);
   const grouped = {};
   state.history.forEach(h => {
     grouped[h.id] = grouped[h.id] || [];
@@ -796,6 +987,7 @@ function renderHistory(main){
     main.appendChild(title);
     const card = document.createElement('div');
     card.className = 'card';
+    card.innerHTML = sparkline(grouped[id]);
     grouped[id].slice(0,10).forEach(h => {
       const d = new Date(h.date);
       const dateStr = d.toLocaleDateString(undefined, { month:'short', day:'numeric' });
@@ -817,6 +1009,9 @@ document.querySelectorAll('nav.tabbar button').forEach(btn=>{
 });
 
 document.getElementById('restSkip').onclick = stopRest;
+document.getElementById('sheetOverlay').addEventListener('click', (e) => {
+  if(e.target.id === 'sheetOverlay') hideSheet();
+});
 
 loadState();
 

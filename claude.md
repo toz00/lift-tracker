@@ -45,6 +45,7 @@ Everything lives in one `localStorage` key, `tracker-data`, as JSON:
 ```js
 {
   bodyweight: number | null,
+  lastBackup: string | null,   // ISO date of last export, drives the backup nudge
   exercises: {
     "<exercise_id>": { weight: number | null, unit: "kg", fails: number }
   },
@@ -114,7 +115,10 @@ regression this app can have (a logged set that silently doesn't persist).
 
 Export/Import (in the History tab) serialize/deserialize the exact same
 JSON shape as `tracker-data` and are the user's manual backup path, since
-`localStorage` doesn't sync across devices or browsers. Keep the exported
+`localStorage` doesn't sync across devices or browsers. Export prefers the
+Web Share API (share sheet on Android) and falls back to a file download;
+either path stamps `lastBackup`, and the History tab shows a nudge banner
+when there are ≥5 sessions and no backup in 14 days. Keep the exported
 JSON schema backward-compatible if you change the data model — old exports
 should still import cleanly, or `loadState()`/import should upgrade them.
 
@@ -126,6 +130,17 @@ should still import cleanly, or `loadState()`/import should upgrade them.
 - Mobile-first, single column, max-width 480px, bottom tab bar (`push` /
   `pull` / `legs` / `history`). This is meant to be used one-handed,
   standing up, mid-workout — keep interactions to one or two taps.
+- On load the app opens on the suggested day (`suggestDay()`): the day
+  already trained today, else the next in the Push → Pull → Legs rotation.
+- Exercises already logged today render as collapsed "done rows" (tap to
+  re-expand). Expanding/collapsing swaps the single card node in place —
+  never call a full `render()` for it, that wipes reps typed into other
+  cards. Logging the last exercise of a day pops a session-summary sheet.
+- All confirmations and info popups use the in-app bottom sheet
+  (`showSheet(title, bodyHTML, buttons)`) — never `alert()`/`confirm()`,
+  which render as jarring system dialogs in the APK wrapper.
+- History shows an inline SVG sparkline of weight over time per exercise
+  (`sparkline()`), no charting library — keep it that way.
 - Icons are hand-authored inline SVG pictograms (`ICON_PATHS`), not photos —
   intentional, to avoid copyright issues with real equipment photos and to
   keep the app fully offline-capable. Keep new icons in the same style:
