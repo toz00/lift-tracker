@@ -47,7 +47,7 @@ Everything lives in one `localStorage` key, `tracker-data`, as JSON:
   bodyweight: number | null,
   lastBackup: string | null,   // ISO date of last export, drives the backup nudge
   exercises: {
-    "<exercise_id>": { weight: number | null, unit: "kg", fails: number }
+    "<exercise_id>": { weight: number | null, unit: "kg", fails: number, note?: string }
   },
   history: [
     { id, name, date (ISO string), weight, unit, reps: number[], result }
@@ -86,10 +86,21 @@ The progression algorithm lives in the `log` button handler inside
      reset `fails` to 0.
 
 Weights move in `KG_STEP` (2.5 kg) increments — typical machine stacks.
-Increases round **up** to the next step and deloads round **down**
-(`roundUpToStep` / `roundDownToStep`), so a percentage change always moves
-the weight by at least one step even at light loads; plain nearest-step
-rounding (`roundToStep`) is only used for starting-weight suggestions.
+Increases round **up** and are clamped to land at least one full step above
+the current weight (so a weight sitting at 0 kg still moves); deloads round
+**down** (`roundDownToStep`) but a weight at or below one step stays put
+with a "rebuild the reps" message. Plain nearest-step rounding
+(`roundToStep`) is only used for starting-weight suggestions.
+
+An exercise with `bw: true` in `DEFAULT_EXERCISES` (back extension) is
+**bodyweight**: no weight row or "Find start weight" button, history
+entries record `weight: 0` (displayed as "BW", sparkline plots total reps
+instead of load), and the increase/hold/miss feedback talks about reps and
+tempo instead of moving weight.
+
+Each card has a free-text machine-notes input (seat height, handle
+position) stored per exercise in `note` — persistent settings, not
+per-session data.
 
 The rest timer between sets is driven by `REST_SECONDS` (keyed by
 muscle-group size, like `INCREMENTS`); it (re)starts whenever a set's reps

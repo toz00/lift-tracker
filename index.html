@@ -96,6 +96,18 @@
   }
   .set-row input:focus{ outline:none; border-color:var(--accent); }
 
+  .bw-tag{
+    font-family:'Oswald',sans-serif; font-size:16px; font-weight:600;
+    color:var(--text-muted); text-transform:uppercase; letter-spacing:0.04em;
+  }
+  .note-input{
+    width:100%; background:transparent; border:none; border-bottom:1px dashed var(--line);
+    color:var(--text-muted); font-size:12px; padding:6px 2px; margin-bottom:10px;
+    font-family:'Inter',sans-serif;
+  }
+  .note-input:focus{ outline:none; border-bottom-color:var(--accent); color:var(--text); }
+  .note-input::placeholder{ color:var(--text-muted); opacity:0.55; }
+
   .row-btns{ display:flex; gap:8px; }
   .btn{
     flex:1; padding:10px 8px; border-radius:6px; border:none; font-size:13px; font-weight:600;
@@ -267,8 +279,8 @@ const DEFAULT_EXERCISES = [
   { id:'leg_press',     day:'legs', name:'Leg Press',                  low:8,  high:12, size:'legs',   sets:3 },
   { id:'leg_extension', day:'legs', name:'Leg Extension',              low:10, high:15, size:'small',  sets:2 },
   { id:'leg_curl',      day:'legs', name:'Seated / Lying Leg Curl',    low:10, high:15, size:'small',  sets:3 },
-  { id:'back_extension', day:'legs', name:'Back Extension',            low:10, high:15, size:'large',  sets:2 },
-  { id:'calf_raise',    day:'legs', name:'Calf Raise Machine',         low:12, high:20, size:'small',  sets:3 },
+  { id:'back_extension', day:'legs', name:'Back Extension',            low:12, high:20, size:'large',  sets:2, bw:true },
+  { id:'calf_raise',    day:'legs', name:'Calf Press on Leg Press',    low:12, high:20, size:'small',  sets:3 },
 ];
 
 const INCREMENTS = { small: 0.04, large: 0.05, legs: 0.075 }; // fraction of current weight
@@ -281,7 +293,7 @@ const KG_STEP = 2.5; // smallest weight increment (app is kg-only; most machine 
 const BW_RATIO = {
   chest_press: 0.40, shoulder_press: 0.30, pec_deck: 0.20, lateral_raise: 0.10, tri_pushdown: 0.15,
   lat_pulldown: 0.30, seated_row: 0.30, rear_delt_fly: 0.10, bicep_curl: 0.15, ab_crunch: 0.20,
-  leg_press: 0.50, leg_extension: 0.25, leg_curl: 0.25, back_extension: 0.25, calf_raise: 0.35,
+  leg_press: 0.50, leg_extension: 0.25, leg_curl: 0.25, back_extension: 0.25, calf_raise: 0.50,
 };
 
 // Original simple pictogram icons (not photos) so machines are easy to ID at a glance.
@@ -617,7 +629,9 @@ function renderDoneRow(ex){
   row.className = 'done-row';
   row.innerHTML = `<span class="done-check">✓</span><span class="done-name"></span><span class="done-info"></span>`;
   row.querySelector('.done-name').textContent = ex.name;
-  row.querySelector('.done-info').textContent = le ? `${le.weight} kg × ${le.reps.join(', ')}` : '';
+  row.querySelector('.done-info').textContent = !le ? ''
+    : le.weight ? `${le.weight} kg × ${le.reps.join(', ')}`
+    : `${le.reps.join(', ')} reps`;
   // swap in place — a full render() would wipe reps typed into other cards
   row.onclick = () => {
     expandedToday.add(ex.id);
@@ -644,25 +658,40 @@ function renderExerciseCard(ex){
       </div>
       <span class="ex-range">${ex.low}–${ex.high} reps</span>
     </div>
+    ${ex.bw ? `
+    <div class="weight-row">
+      <span class="wlabel">Load</span>
+      <span class="bw-tag">Bodyweight</span>
+    </div>` : `
     <div class="weight-row">
       <span class="wlabel">Working wt</span>
       <button class="wbtn" data-act="minus">−</button>
       <span class="wval" data-role="wval">${weightDisplay}</span>
       <button class="wbtn" data-act="plus">+</button>
       <span class="wunit">kg</span>
-    </div>
+    </div>`}
     <div class="sets" data-role="sets"></div>
+    <input class="note-input" data-role="note" maxlength="80" placeholder="Machine notes — seat height, handles… (kept between sessions)">
     <div class="row-btns">
-      <button class="btn btn-ghost" data-act="find">Find start weight</button>
+      ${ex.bw ? '' : '<button class="btn btn-ghost" data-act="find">Find start weight</button>'}
       <button class="btn btn-primary" data-act="log">Log session</button>
     </div>
     <div class="feedback" data-role="feedback"></div>
   `;
 
+  const noteInput = card.querySelector('[data-role="note"]');
+  noteInput.value = data.note || '';
+  noteInput.addEventListener('change', () => {
+    data.note = noteInput.value.trim();
+    saveState();
+  });
+
   const lastEl = card.querySelector('[data-role="last"]');
   function updateLast(){
     const le = lastEntryFor(ex.id);
-    lastEl.textContent = le ? `Last: ${le.weight} kg × ${le.reps.join(', ')}` : 'No sessions yet';
+    lastEl.textContent = !le ? 'No sessions yet'
+      : le.weight ? `Last: ${le.weight} kg × ${le.reps.join(', ')}`
+      : `Last: ${le.reps.join(', ')} reps`;
   }
   updateLast();
 
@@ -694,6 +723,7 @@ function renderExerciseCard(ex){
   }
 
   const wvalEl = card.querySelector('[data-role="wval"]');
+  if(!ex.bw){
   card.querySelector('[data-act="minus"]').onclick = () => {
     data.weight = Math.max(0, (data.weight || KG_STEP) - KG_STEP);
     wvalEl.textContent = data.weight;
@@ -730,6 +760,7 @@ function renderExerciseCard(ex){
       </table>
     `);
   };
+  } // end !ex.bw
 
   const fbEl = card.querySelector('[data-role="feedback"]');
   card.querySelector('[data-act="log"]').onclick = () => {
@@ -740,7 +771,7 @@ function renderExerciseCard(ex){
       fbEl.textContent = 'Enter reps for every set first.';
       return;
     }
-    if(data.weight === null){
+    if(!ex.bw && data.weight === null){
       fbEl.className = 'feedback show down';
       fbEl.textContent = 'Set a starting weight first (use "Find start weight" or +/-).';
       return;
@@ -753,9 +784,27 @@ function renderExerciseCard(ex){
     const prevFails = data.fails || 0;
     let result, msg, cls;
 
-    if(allTop){
+    if(ex.bw){
+      // bodyweight exercise: no load to move, progress through reps and tempo
+      if(allTop){
+        result = 'increase';
+        msg = `All sets at ${ex.high}+. Make it harder next time: pause 2s at the top, slow the lowering, or hold any weight you can find.`;
+        cls = 'up';
+      } else if(allBottom){
+        result = 'hold';
+        msg = `Solid — within range. Aim for a rep or two more next session.`;
+        cls = 'same';
+      } else {
+        result = 'miss';
+        msg = `Below ${ex.low} reps on a set — no problem, build the reps back up.`;
+        cls = 'down';
+      }
+      data.fails = 0;
+    } else if(allTop){
       const pct = INCREMENTS[ex.size];
-      const newWeight = roundUpToStep(data.weight * (1 + pct));
+      // never round back onto the current weight — an increase always moves
+      // at least one full step (also un-sticks a weight left at 0)
+      const newWeight = Math.max(roundUpToStep(data.weight * (1 + pct)), data.weight + KG_STEP);
       result = 'increase';
       msg = `All sets hit ${ex.high}+. Next session: ${newWeight} kg (was ${data.weight}).`;
       cls = 'up';
@@ -769,9 +818,12 @@ function renderExerciseCard(ex){
     } else {
       data.fails = (data.fails || 0) + 1;
       if(data.fails >= 2){
-        const newWeight = roundDownToStep(data.weight * 0.9);
+        // at or below one step there is nothing left to remove
+        const newWeight = data.weight > KG_STEP ? roundDownToStep(data.weight * 0.9) : data.weight;
         result = 'decrease';
-        msg = `Missed ${ex.low} reps two sessions running. Dropping to ${newWeight} kg to rebuild.`;
+        msg = newWeight < data.weight
+          ? `Missed ${ex.low} reps two sessions running. Dropping to ${newWeight} kg to rebuild.`
+          : `Missed ${ex.low} reps two sessions running. Weight is already minimal — rebuild the reps at ${data.weight} kg.`;
         cls = 'down';
         data.weight = newWeight;
         data.fails = 0;
@@ -784,7 +836,7 @@ function renderExerciseCard(ex){
 
     const entry = {
       id: ex.id, name: ex.name, date: new Date().toISOString(),
-      weight: prevWeight, unit: 'kg', reps, result
+      weight: ex.bw ? 0 : prevWeight, unit: 'kg', reps, result
     };
     state.history.unshift(entry);
     saveState();
@@ -815,13 +867,13 @@ function renderExerciseCard(ex){
       data.fails = prevFails;
       saveState();
       inputs.forEach((inp, i) => inp.value = reps[i]);
-      wvalEl.textContent = data.weight;
+      if(wvalEl) wvalEl.textContent = data.weight;
       fbEl.className = 'feedback';
       fbEl.innerHTML = '';
       updateLast();
     };
 
-    wvalEl.textContent = data.weight;
+    if(wvalEl) wvalEl.textContent = data.weight;
     inputs.forEach(i => i.value = '');
     updateLast();
 
@@ -937,7 +989,8 @@ function handleImportFile(e, statusEl){
 }
 
 function sparkline(entries){ // entries newest-first, needs >= 2 points
-  const pts = entries.slice().reverse().map(h => h.weight);
+  // bodyweight sessions (weight 0) chart total reps instead of load
+  const pts = entries.slice().reverse().map(h => h.weight || h.reps.reduce((a, b) => a + (b || 0), 0));
   if(pts.length < 2) return '';
   const min = Math.min(...pts), max = Math.max(...pts);
   const W = 300, H = 44, pad = 5;
@@ -993,7 +1046,8 @@ function renderHistory(main){
       const dateStr = d.toLocaleDateString(undefined, { month:'short', day:'numeric' });
       const row = document.createElement('div');
       row.className = 'history-item';
-      row.innerHTML = `<span class="hdate">${dateStr}</span><span>${h.weight}${h.unit} × [${h.reps.join(', ')}]</span>`;
+      const isBw = (exById(h.id) || {}).bw;
+      row.innerHTML = `<span class="hdate">${dateStr}</span><span>${isBw ? 'BW' : h.weight + h.unit} × [${h.reps.join(', ')}]</span>`;
       card.appendChild(row);
     });
     main.appendChild(card);
